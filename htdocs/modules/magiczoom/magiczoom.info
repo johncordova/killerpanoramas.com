@@ -1,0 +1,6 @@
+; $Id$
+name = Magic Zoom
+description = Magic Zoom <sup>&#8482;</sup> lets you display a high-res zoomed image when your visitors hover over an image. Try out some customisation options http://www.magictoolbox.com/magiczoom_integration/. By http://www.magictoolbox.com/. <br /> NOTE: This module requires one of those modules: Image, ImageField, ImageCache, or UberCart e-commerce suite.
+core = 7.x
+package = Image
+version = 2.16.19

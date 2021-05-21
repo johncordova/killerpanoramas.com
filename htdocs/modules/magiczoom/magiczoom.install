@@ -1,0 +1,24 @@
+<?php
+
+magiczoom_fix_css();
+
+function magiczoom_fix_css() {
+
+    $cssFSPath = dirname(__FILE__) . '/magiczoom.css';
+
+	if (!is_writable($cssFSPath)) {
+		drupal_set_message(t('This installer need to modify some module files. Please check write access for "'.$cssFSPath.'" file of your module.'),'error');
+	} else {
+		$fileContents = file_get_contents($cssFSPath);
+		$cssWSPath = base_path() . drupal_get_path('module', 'magiczoom');
+		$pattern = '/url\(\s*(?:\'|")?(?!'.preg_quote($cssWSPath, '/').')\/?([^\)\s]+?)(?:\'|")?\s*\)/is';
+		$replace = 'url(' . $cssWSPath . '/$1)';
+		$fixedFileContents = preg_replace($pattern, $replace, $fileContents);
+		if($fixedFileContents != $fileContents) {
+			file_put_contents($cssFSPath, $fixedFileContents);
+		}
+	}
+
+}
+
+?>

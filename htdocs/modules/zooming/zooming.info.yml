@@ -1,0 +1,13 @@
+name: Zooming
+description: Image zoom that makes sense.
+type: module
+core: 8.x
+core_version_requirement: ^8 || ^9
+package: Blazy
+dependencies:
+  - blazy:blazy
+
+# Information added by Drupal.org packaging script on 2020-02-15
+version: '8.x-1.0'
+project: 'zooming'
+datestamp: 1581745536

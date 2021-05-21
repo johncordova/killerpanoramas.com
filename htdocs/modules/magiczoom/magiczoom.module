@@ -1,0 +1,692 @@
+<?php
+
+if(defined('VERSION') && intval(VERSION) < 6) {
+    if(!function_exists('file_put_contents')) {
+        function file_put_contents($filename, $data) {
+            $fp = fopen($filename, 'w+');
+            if ($fp) {
+                fwrite($fp, $data);
+                fclose($fp);
+            }
+        }
+    }
+
+    /*$GLOBALS['magictoolbox']['drupal_theme_registry'] = & $functions;
+    if($function == '_magictoools_skip_this_call_') return;*/
+
+    function magiczoom_enable() {
+        $path = dirname($_SERVER['SCRIPT_FILENAME']);
+        $file = "{$path}/includes/theme.inc";
+        $content = file_get_contents($file);
+        if(!preg_match("/magictoolbox/is", $content)) {
+            $pattern = 'function theme() { static $functions; $args = func_get_args(); $function = array_shift($args);';
+            $result = '$1' . "\n\r" . '$GLOBALS["magictoolbox"]["drupal_theme_registry"] = $functions; if($function == "_magictoools_skip_this_call_") return;';
+            $pattern = str_replace(" ", '\s*?', preg_quote($pattern, '/'));
+            $pattern = "/({$pattern})/is";
+            $content = preg_replace($pattern, $result, $content);
+            file_put_contents($file, $content);
+        }
+    }
+}
+
+function magiczoom_init() {
+    
+    // in drupal5 this function doesn't exists when caching enabled. 
+    // also when caching enabled we do not need to load module (it was already loaded in cache)
+    if(!function_exists('theme')) {
+        return;
+    }
+    
+    if(defined('VERSION') && intval(VERSION) < 6) {
+        theme('_magictoools_skip_this_call_');
+        $GLOBALS['magictoolbox']['drupal_theme_registry'] = magiczoom_theme_registry_alter($GLOBALS['magictoolbox']['drupal_theme_registry']);
+    }
+    
+    $tool = magiczoom_load_core_class();
+    
+    $module_path = drupal_get_path('module', 'magiczoom');
+    
+    // If the path doesn't match any of the exeptions, load header files.
+     $pages = $tool->params->getValue('pages');
+     $path = drupal_get_path_alias($_GET['q']);
+     $regexp = '/^('. preg_replace(array('/(\r\n?|\n)/', '/\\\\\*/', '/(^|\|)\\\\<front\\\\>($|\|)/'), array('|', '.*', '\1'. preg_quote(variable_get('site_frontpage', 'node'), '/') .'\2'), preg_quote($pages, '/')) .')$/';
+    // Compare with the internal and path alias (if any).
+    $page_match = preg_match($regexp, $path);
+    if ($path != $_GET['q']) {
+      $page_match = $page_match || preg_match($regexp, $_GET['q']);
+    }
+    if (!$page_match) {
+      if(defined('VERSION') && intval(VERSION) < 7) {
+        drupal_set_html_head($tool->getHeadersTemplate(base_path() . $module_path));
+      } else {
+        drupal_add_html_head(array(
+          '#type' => 'markup',
+          '#markup' => $tool->getHeadersTemplate(base_path() . $module_path)
+        ), 'MagicZoom');
+      }
+      define('_MAGICZOOM_MODULE_ALLOWED', true);
+    } else { 
+        define('_MAGICZOOM_MODULE_ALLOWED', false);
+    }
+}
+
+function magiczoom_load_core_class() {
+    if(!isset($GLOBALS["magictoolbox"])) $GLOBALS["magictoolbox"] = array();
+    if(!isset($GLOBALS["magictoolbox"]["magiczoom"])) {
+        /* load core class */
+        require_once(dirname(__FILE__) . '/magiczoom.module.core.class.php');
+        $tool = new MagicZoomModuleCoreClass();
+    
+        /* add category for core params */
+        $params = $tool->params->getParams();
+        foreach($params as $k => $v) {
+            $v['category'] = array(
+                "name" => 'General options',
+                "id" => 'general-options'
+            );
+            $params[$k] = $v;
+        }
+        $tool->params->appendParams($params);
+
+        $tool->params->appendParams(array(
+            "pages" => array(
+                "id" => "pages", 
+                "label" => "Deactivate Magic Zoom on specific pages",
+                "type" => "textarea",
+                "default" => t("admin*\nimg_assist*\nnode/add/*\nnode/*/edit"),
+                "description" => t("Enter one page per line as Drupal paths. The '*' character is a wildcard. Example paths are 'blog' for the blog page and 'blog/*' for every personal blog. '<front>' is the front page."),
+                "category" => array(
+                    "id" => 'general-options',
+                    "name" => 'General options'
+                ),
+            )
+        ));
+        /* add params used only for drupal with IMAGE module */
+        if (module_exists('image')) {
+            $sizes = array();
+            if(defined('VERSION') && intval(VERSION) < 7) {
+                foreach (image_get_sizes() as $label => $size) {
+                    $sizes[$label] = $size['label'];
+                    //if($size['width']) $sizes[$label] .= ' (' . $size['width'] . 'x' . $size['height'] . ')';
+                }
+            } else {
+                foreach (image_styles() as $label => $size) {
+                    $sizes[$label] = $size['name'];
+                }
+                $sizes['_original'] = 'original';
+            }
+
+            $tool->params->appendParams(array(
+                "auto" => array(
+                    "id" => "auto", 
+                    "label" => "Enable for image nodes",
+                    "type" => "array",
+                    "subType" => "radio",
+                    "values" => array("Yes", "No"),
+                    "default" => "Yes",
+                    "description" => "Automatically activate effect for all image nodes (requires the image module).",
+                    "category" => array(
+                        "id" => 'imagemodule',
+                        "name" => 'Image module options'
+                    ),
+                ),
+                "derivatives" => array(
+                    "id" => "derivatives", 
+                    "label" => "Image derivatives",
+                    "type" => "array",
+                    "subType" => "checkboxes",
+                    "values" => $sizes,
+                    "default" => array("thumbnail" => "thumbnail", "preview" => "preview", "medium" => "medium", "large" => 0, "_original" => 0),
+                    "description" => "Select which image derivatives will be zoomed",
+                    "category" => array(
+                        "id" => 'imagemodule',
+                        "name" => 'Image module options'
+                    ),
+                ),
+                "large-derivative" => array(
+                    "id" => "large-derivative", 
+                    "label" => "Large Image derivative",
+                    "type" => "array",
+                    "subType" => "select",
+                    "values" => $sizes,
+                    "default" => "_original",
+                    "description" => "Select which image derivative will be used as the large (zoomed) image.",
+                    "category" => array(
+                        "id" => 'imagemodule',
+                        "name" => 'Image module options'
+                    ),
+                )
+            ));
+        }
+        
+        if(module_exists('img_assist')) {
+            $tool->params->appendParams(array(
+                    "img-links" => array(
+                    "id" => "img-links", 
+                    "label" => "Support image links",
+                    "type" => "array",
+                    "subType" => "radio",
+                    "values" => array("Yes", "No"),
+                    "default" => "No",
+                    "description" => "Support native image links. Links will be able for onclick action",
+                    "category" => array(
+                        "id" => 'imagemodule',
+                        "name" => 'Image module options'
+                    ),
+                )
+            ));
+        }
+
+
+
+        if(module_exists('imagecache')) {
+            //print_r(imagecache_presets()); die();
+            $presets = array();
+            foreach(imagecache_presets() as $p) {
+                $presets[$p['presetname']] = $p['presetname'];
+            }
+            $imagecache = array(
+                'id' => 'imagecache',
+                'name' => 'Imagecache module options'
+            );
+            $tool->params->appendParams(array(
+                'presets-list' => array(
+                    'id' => 'presets-list', 
+                    'label' => 'Imagecache presets',
+                    'type' => 'array',
+                    'subType' => 'checkboxes',
+                    'values' => $presets,
+                    'default' => array(),
+                    'description' => "Select which imagecache presets will be zoomed.",
+                    'category' => $imagecache
+                ),
+                'presets-large' => array(
+                    'id' => 'presets-large', 
+                    'label' => 'Large Imagecache presets',
+                    'type' => 'array',
+                    'subType' => 'select',
+                    'values' => $presets,
+                    'default' => $presets[0],
+                    'description' => "Select which imagecache preset will be used as the large (zoomed) image.",
+                    'category' => $imagecache
+                )
+            ));
+        }
+
+        if(module_exists('imagefield')) {
+            $imagefield = array(
+                'id' => 'imagefield',
+                'name' => 'Imagefield module options'
+            );
+            $tool->params->appendParams(array(
+                'imagefield-auto' => array(
+                    'id' => 'imagefield-auto', 
+                    'label' => 'Enable for Imagefields',
+                    'type' => 'array',
+                    'subType' => 'radio',
+                    'values' => array('Yes', 'No'),
+                    'default' => 'Yes',
+                    'description' => 'Automatically activate effect for all image fileds',
+                    'category' => $imagefield
+                ),
+                'imagefield-width' => array(
+                    'id' => 'imagefield-width', 
+                    'label' => 'Width of images',
+                    'type' => 'num',
+                    'default' => 150,
+                    'description' => "Value of width attribute for IMG tag<br /><b>Use -1 for auto</b>",
+                    'category' => $imagefield
+                ),
+                'imagefield-height' => array(
+                    'id' => 'imagefield-height', 
+                    'label' => 'Height of images',
+                    'type' => 'num',
+                    'default' => -1,
+                    'description' => "Value of height attribute for IMG tag<br /><b>Use -1 for auto</b>",
+                    'category' => $imagefield
+                )
+            ));
+        }
+        
+        /* load params */
+        foreach($tool->params->getNames() as $name) {
+            $val = variable_get('magictoolbox_magiczoom_' . $name, $tool->params->getValue($name));
+            $tool->params->setValue($name, $val);
+        }
+        
+        $GLOBALS["magictoolbox"]["magiczoom"] = $tool;
+    }
+    return $GLOBALS["magictoolbox"]["magiczoom"];
+}
+
+function magiczoom_menu() {
+    global $user;
+
+    $items = array();
+    
+    $args = func_get_args();
+    if(count($args) > 0 && !$arcgs[0]) {
+        // for drupal5 we do not need load menu in caching mode
+        return $items;
+    }
+    
+    if(defined('VERSION') && intval(VERSION) >= 6) {
+    
+        $items['admin/settings/magiczoom'] = array(
+            'title' => 'Magic Zoom',
+            'description' => 'Configure Magic Zoom settings',
+            'page callback' => 'drupal_get_form',
+            'page arguments' => array('magiczoom_admin_settings'),
+            'access arguments' => array('administer site configuration'),
+            'type' => MENU_NORMAL_ITEM,
+        );
+        
+    } else {
+        
+        $items[] = array(
+            'path' => 'admin/settings/magiczoom', 
+            'title' => 'Magic Zoom',
+            'description' => 'Configure Magic Zoom settings',
+            'callback' => 'drupal_get_form',
+            'callback arguments' => array('magiczoom_admin_settings'),
+            'access' => user_access('administer site configuration'),
+            'type' => MENU_NORMAL_ITEM,
+        );
+        
+    }
+ 
+    return $items;
+}
+
+/**
+ * Menu callback for admin_settings.
+ */
+function magiczoom_admin_settings() {
+
+    $tool = magiczoom_load_core_class();
+
+    $form = array();
+   
+    foreach($tool->params->getParams() as $name=> $value) {
+        if(!isset($form['magiczoom_' . $value['category']['id']])) {
+            $form['magiczoom_' . $value['category']['id']] = array(
+                '#type' => 'fieldset',
+                '#title' => t($value['category']['name'])
+            );        
+        }    
+        switch($value['type']) {
+            case 'array': $type = ($value['subType'] == 'radio' ? 'radios' : ($value['subType'] == 'checkboxes' ? 'checkboxes' : 'select')); break;
+            case 'textarea': $type = 'textarea'; break;
+            default: $type = 'textfield';
+        }
+        $form['magiczoom_' . $value['category']['id']]['magictoolbox_magiczoom_' . $name] = array(
+            '#type' => $type,
+            '#title' => t($value['label']),
+            '#default_value' => $tool->params->getValue($name),
+        );
+        if($value["type"] == 'array') {
+            $options = array();
+            if($value['subType'] == 'checkboxes') $options = $value['values'];
+            else {
+                foreach($value['values'] as $v) {
+                    $options[$v] = t($v);                
+                }
+            }
+            $form['magiczoom_' . $value['category']['id']]['magictoolbox_magiczoom_' . $name]['#options'] = $options;
+        }
+        if(isset($value['description'])) {
+            $form['magiczoom_' . $value['category']['id']]['magictoolbox_magiczoom_' . $name]['#description'] = $value['description'];
+        }
+        /*if($type == 'textfield') {
+             $form['magiczoom_' . $value['category']['id']]['magictoolbox_magiczoom_' . $name]['#size'] = 50;
+             $form['magiczoom_' . $value['category']['id']]['magictoolbox_magiczoom_' . $name]['#maxlength'] = 50;
+        }*/
+    }
+
+    return system_settings_form($form);
+}
+
+function magiczoom_theme_registry_alter(&$theme_registry) {
+    $tool = magiczoom_load_core_class();
+    if(defined('VERSION') && intval(VERSION) < 6) {
+        if($tool->params->checkValue('auto', 'Yes')) {
+            $theme_registry["image_display"] = "theme_magiczoom_image_display";
+        }
+        $theme_registry["imagecache"] = "theme_magiczoom_imagecache";
+        $theme_registry["imagefield_image"] = "theme_magiczoom_imagefield_image";
+        $theme_registry["uc_product_image"] = "theme_magiczoom_uc_product_image";
+    } else {
+        if($tool->params->checkValue('auto', 'Yes')) {
+            $theme_registry["image_display"]["function"] = "theme_magiczoom_image_display";
+            if(defined('VERSION') && intval(VERSION) > 6) {
+                $theme_registry["image_formatter"]["function"] = "theme_magiczoom_image_formatter";
+            }
+        }
+        $theme_registry["imagecache"]["function"] = "theme_magiczoom_imagecache";
+        $theme_registry["imagefield_image"]["function"] = "theme_magiczoom_imagefield_image";
+        $theme_registry["uc_product_image"]["function"] = "theme_magiczoom_uc_product_image";
+    }
+    return $theme_registry;
+}
+
+function theme_magiczoom_image_formatter($variables) {
+
+    $tool = magiczoom_load_core_class();
+
+    $imageHTML = theme_image_formatter($variables);
+
+    if($tool->params->checkValue('auto', 'No')) return $imageHTML;
+    if(!_MAGICZOOM_MODULE_ALLOWED) return $imageHTML;
+
+    $allowed = $tool->params->getValue('derivatives');
+
+    //NOTE: fixed an issue in drupal7 when 'image_style' is empty
+    //      need investigation in drupal6
+    if(empty($variables['image_style'])) {
+        $variables['image_style'] = '_original';
+    }
+
+    if(!isset($variables['image_style']) || empty($variables['image_style']) || !isset($allowed[(string)$variables['image_style']]) || (string)($allowed[(string)$variables['image_style']]) !== (string)$variables['image_style']) return $imageHTML;
+
+    if(!empty($variables['path']) && isset($variables['path']['options']['entity'])) {
+        $title = trim($variables['path']['options']['entity']->title);
+    } else {
+        $title = $variables['item']['title'];
+    }
+
+    $thumb = preg_replace("/^.*?src=\"(.*?)\".*$/is", "$1", $imageHTML);
+
+    $t = $tool->params->getValue('large-derivative');
+    //$t = strtolower($t);
+    //if($t == 'original') $t = '_'.$t;
+
+    //if($t == '_original') {
+    if(strtolower($t) == 'original') {
+        $img = file_create_url($variables['item']['uri']);
+    } else {
+        $img = image_style_path('large', $variables['item']['uri']);
+        $img = file_create_url($img);
+    }
+
+    $html = $tool->getMainTemplate(array(
+        'img' => $img,
+        'thumb' => $thumb,
+        'title' => $title,
+        'alt' => $variables['item']['alt']
+    ));
+
+    return '<div class="MagicToolboxContainer">'.$html.'</div>';
+}
+
+function theme_magiczoom_imagefield_image($file, $alt = '', $title = '', $a = null, $g = true) {
+    $args = func_get_args();
+    
+    $tool = magiczoom_load_core_class();
+
+    if($tool->params->checkValue('imagefield-auto', 'No') || preg_match('/^edit-/is', $a['id'])) {
+        return call_user_func_array('theme_imagefield_image', $args);
+    }
+    if(!_MAGICZOOM_MODULE_ALLOWED) return call_user_func_array('theme_imagefield_image', $args);
+
+    $file = (array)$file;
+    if (!is_file($file['filepath'])) {
+        return '<!-- File not found: ' . $file['filepath']  .' -->';
+    }
+
+    $thumb = $img = file_create_url($file['filepath']);
+    
+    $width = $tool->params->getValue('imagefield-width');
+    $width = ($width == '-1') ? null : $width;
+    $height = $tool->params->getValue('imagefield-height');
+    $height = ($height == '-1') ? null : $height;
+
+
+    return $tool->getMainTemplate(compact('img', 'thumb', 'alt', 'title', 'width', 'height'));
+}
+
+function theme_magiczoom_imagecache($presetname, $path, $alt = '', $title = '', $a = null, $g = true) {
+    $args = func_get_args();
+    
+    $tool = magiczoom_load_core_class();
+    
+    // check allowed presets
+    $allowed = $tool->params->getValue('presets-list');
+    if((string)($allowed[(string)$presetname]) !== (string)$presetname) {
+        return call_user_func_array('theme_imagecache', $args);
+    }
+    if(!_MAGICZOOM_MODULE_ALLOWED) return call_user_func_array('theme_imagecache', $args);
+
+    $thumb = imagecache_create_url($presetname, $path);
+    $img = imagecache_create_url($tool->params->getValue('presets-large'), $path);
+
+    return $tool->getMainTemplate(compact('img', 'thumb', 'alt', 'title'));
+}
+
+function theme_magiczoom_image_display($node, $label, $url, $attributes) {
+    
+    $tool = magiczoom_load_core_class();
+    
+    
+    // Support of links with enabled MZ effect
+    $img_nid = $node->nid; // current image nod id;
+    if ($tool->params->checkValue('img-links', 'Yes') && 
+	        $tool->params->checkValue('drag-mode', 'No') && 
+	        $tool->params->checkValue('initialize-on', 'No') && 
+        	$tool->params->checkValue('click-to-activate', 'No')) { 
+        //if image links are enabled in MZ
+	    /*$ch1 = 0;
+	    foreach (arg() as $value) {
+	        if ($ch1 % 2) $arg[] = $value; else $num[] = $value;
+	        $ch1++;
+	    }
+	    $arguments = array_combine($num,$arg);
+    	$nid = intval($arguments['node']);*/
+	    $nid = arg(1); // current node id (parent)
+    	$result = db_query('SELECT * FROM {node_revisions} WHERE nid = %d', $nid); 
+    	$row = db_fetch_object($result);
+	    preg_match_all('/\[img_assist.*?\]/is',$row->body,$matches); // get all img_assist images in $matches array
+	    if (count($matches[0]) > 0) { 
+	        foreach ($matches[0] as $img_assist_img) {
+ 		        $img_assist_img = preg_replace('/\[/is','',$img_assist_img);
+		        $img_assist_img = preg_replace('/\]/is','',$img_assist_img);
+		        $img_assist_img = explode ('|',$img_assist_img);
+		        foreach ($img_assist_img as $img_param) {
+		            list($node_arg[],$node_arg_value[]) = explode('=',$img_param);
+		        }
+		        $img_assist_img = array_combine($node_arg,$node_arg_value);  
+		        $img_assist_array[$img_assist_img['nid']] = $img_assist_img;
+	        }
+            //if we have an external link 
+	        if ($img_assist_array[$img_nid]['link'] == 'url' && !empty($img_assist_array[$img_nid]['url'])) $img_url = $img_assist_array[$img_nid]['url']; 
+	        if ($img_assist_array[$img_nid]['link'] == 'node' && url(arg(0).'/'.$img_nid)) $img_url = url(arg(0).'/'.$img_nid); //if we have a link to image node
+	        if ($img_assist_array[$img_nid]['link'] == 'popup') {
+                //if we have a 'popup' option selected
+		        $popup_size = variable_get('img_assist_popup_label', IMAGE_PREVIEW);
+		        $info = image_get_info(file_create_path($node->images[$popup_size]));
+	        }
+            //if we have no link 
+	        if ($img_assist_array[$img_nid]['link'] == 'none') $img_url = ''; 
+	    
+	    }
+    }
+    
+    
+    
+    $imageHTML = theme('image', $url, $node->title, $node->title, $attributes, FALSE);
+    
+    if($tool->params->checkValue('auto', 'No')) return $imageHTML;
+    if(!_MAGICZOOM_MODULE_ALLOWED) return $imageHTML;
+    
+    $allowed = $tool->params->getValue('derivatives');
+    if((string)($allowed[(string)$label]) !== (string)$label) return $imageHTML;
+    
+    /* is this image node ? */
+    //if(!isset($node->build_mode) && !isset($node->readmore) && !isset($node->content)) return $imageHTML;
+    
+    $title = trim($node->title);
+
+    $thumb = preg_replace("/^.*?src=\"(.*?)\".*$/is", "$1", $imageHTML);
+    
+    if(!defined('_MAGICZOOM_ADDONS_TEMPLATE_LOADED')) {
+        $addons = $tool->getAddonsTemplate(base_path() . drupal_get_path('module', 'magiczoom'));
+        define('_MAGICZOOM_ADDONS_TEMPLATE_LOADED', 1);
+    } else $addons = '';
+
+    $t = $tool->params->getValue('large-derivative');
+    $t = strtolower($t);
+    if($t == 'original') $t = '_' . $t;
+
+    $img = $node->images[$t];
+
+    $img = (url($img) == $img) ? $img : (base_path() . $img);
+    $img = check_url($img);
+
+    $html = $tool->getMainTemplate(array(
+        "img" => $img,
+        "thumb" => $thumb,
+        "title" => $title,
+        "description" => $node->body,
+    ));
+    
+
+
+    return '<div class="MagicToolboxContainer">' . $html . $addons . '</div>';
+}
+
+//NOTE: ubecart 7.x-3.x
+function theme_magiczoom_uc_product_image($variables) {
+
+    static $rel_count = 0;
+
+    if(!_MAGICZOOM_MODULE_ALLOWED || !count($variables['images'])) {
+        $args = func_get_args();
+        return call_user_func_array('theme_uc_product_image', $args);
+    }
+
+    $images = $variables['images'];
+    $tool = magiczoom_load_core_class();
+    $html = '';
+
+    // Get the current product image widget.
+    $image_widget = function_exists('uc_product_get_image_widget') ? uc_product_get_image_widget() : false;
+    if($image_widget) {
+        $image_widget_func = $image_widget['callback'];
+        $image_widget_html = $image_widget_func($rel_count);
+    }
+
+    $html .= '<div class="product-image MagicToolboxContainer">';
+
+    // main image
+    $html .= '<div class="main-product-image">';
+    $a = $tool->getMainTemplate(array(
+        'img' => image_style_url('uc_product_full', $images[0]['uri']),
+        'thumb' => image_style_url('uc_product', $images[0]['uri']),
+        'alt' => $images[0]['alt'],
+        'title' => $images[0]['title'],
+        'id' => 'MainProductImage',
+    ));
+    if($image_widget) {
+        $a = preg_replace('/<a([^>]+)>/is', '<a$1 '.$image_widget_html.'>', $a);
+    }
+    $html .= $a;
+    $html .= '</div>';
+
+    // selectors
+    if(count($images) > 1) {
+        $html .= '<div class="more-product-images MagicToolboxSelectorsContainer">';
+        foreach($images as $img) {
+            if(!is_array($img) || empty($img['uri'])) {
+                continue;
+            }
+            $a = $tool->getSelectorTemplate(array(
+                'img' => image_style_url('uc_product_full', $img['uri']),
+                'medium' => image_style_url('uc_product', $img['uri']),
+                'thumb' => image_style_url('uc_thumbnail', $img['uri']),
+                'alt' => $img['alt'],
+                'title' => $img['title'],
+                'id' => 'MainProductImage',
+            ));
+            if($image_widget) {
+                $a = preg_replace('/<a([^>]+)>/is', '<a$1 ' . $image_widget_html . '>', $a);
+            }
+            $html .= $a;
+        }
+        $html .= '</div>';
+    }
+
+    $html .= '</div>';
+
+    $rel_count++;
+
+    return $html;
+
+}
+
+function magiczoom_nodeapi($node, $op, $a3, $a4) {
+    switch($op) {
+        case 'view':
+            break;
+        case 'alter':
+            
+            if(isset($node->content['add_to_cart']) && user_access('view option images') && count($node->attributes) && isset($node->content['option_image'])) {
+                // rewrite product options images 
+
+                $html = '';
+                $tool = magiczoom_load_core_class();
+                
+                // code here
+
+                $attributes = $node->attributes;    
+                $attribute = $attributes[0];
+                
+                $page_size = variable_get('uc_option_image_page_size', 'preview');  
+                $teaser_size = variable_get('uc_option_image_teaser_size', 'thumbnail'); 
+                //$size = $a4 ? $page_size : $teaser_size;
+                   
+                // Determine if we have a default option using
+                if ($attribute->default_option){
+                    $default_option = $attribute->default_option;
+                } else {
+                    foreach($attribute->options as $key => $option) {
+                        $default_option = $key;
+                        break;
+                    }
+                }
+                
+                $html .= '<div class="MagicToolboxContainer">';
+                // main image
+                // Load the default image file
+                $file = uc_option_image_load($node->nid, $attribute->aid, $default_option);
+                $html .= $tool->getMainTemplate(array(
+                    'img' => imagecache_create_url('product_full', $file->filepath),
+                    'thumb' => imagecache_create_url($page_size, $file->filepath),
+                    'alt' => $attribute->options[$default_option]->name,
+                    'id' => 'MainProductAttributesImage',
+                ));
+
+                // additional images
+                $html .= '<div class="MagicToolboxSelectorsContainer">';
+                foreach($attribute->options as $key => $option) {
+                    $file = uc_option_image_load($node->nid, $attribute->aid, $key);
+                    $html .= $tool->getSelectorTemplate(array(
+                        'img' => imagecache_create_url('product_full', $file->filepath),
+                        'medium' => imagecache_create_url($page_size, $file->filepath),
+                        'thumb' => imagecache_create_url($teaser_size, $file->filepath),
+                        'alt' => $option->name,
+                        'id' => 'MainProductAttributesImage',
+                    ));
+                }
+                $html .= '</div>';
+
+                $html .= '</div>';
+
+                $node->body = str_replace($node->content['option_image']['#value'], $html, $node->body);
+                
+                //print_r($node);
+                //die();
+            }
+            
+        break;
+    }
+}
+
